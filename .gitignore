@@ -18,10 +18,8 @@ migrate_working_dir/
 *.iws
 .idea/
 
-# The .vscode folder contains launch configuration and tasks you configure in
-# VS Code which you may wish to be included in version control, so this line
-# is commented out by default.
-#.vscode/
+# VS Code (opsional, hapus tanda komentar jika tidak mau push setting pribadi)
+.vscode/
 
 # Flutter/Dart/Pub related
 .dart_tool/
@@ -29,7 +27,25 @@ migrate_working_dir/
 .flutter-plugins-dependencies
 .pub-cache/
 .pub/
+.packages
 /build/
+
+# Documentation
+**/doc/api/
+
+# iOS
+ios/Flutter/.last_build_id
+ios/Pods/
+Podfile.lock
+
+# Web build
+web/.dart_tool/
+web/build/
+
+# Signing keys (⛔ penting untuk keamanan)
+*.jks
+*.keystore
+key.properties
 
 # Symbolication related
 app.*.symbols
@@ -37,7 +53,7 @@ app.*.symbols
 # Obfuscation related
 app.*.map.json
 
-# Android Studio will place build artifacts here
-/android/app/debug
-/android/app/profile
-/android/app/release
+# Android build variants (tidak perlu dipush)
+android/app/debug/
+android/app/profile/
+android/app/release/

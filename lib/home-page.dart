@@ -1,9 +1,7 @@
-import 'dart:convert';
-
 import 'package:flutter/material.dart';
-import 'package:presensi/models/home-response.dart';
-import 'package:presensi/simpan-page.dart';
 import 'package:shared_preferences/shared_preferences.dart';
+import 'package:presensi/absen-page.dart';
+import 'package:presensi/login-page.dart';
 import 'package:http/http.dart' as myHttp;
 
 class HomePage extends StatefulWidget {
@@ -15,224 +13,353 @@ class HomePage extends StatefulWidget {
 
 class _HomePageState extends State<HomePage> {
   final Future<SharedPreferences> _prefs = SharedPreferences.getInstance();
-  late Future<String> _name, _token;
-  HomeResponseModel? homeResponseModel;
-  Datum? hariIni;
-  List<Datum> riwayat = [];
+  late Future<String> _name;
+
+  static const Color kPrimary = Color.fromARGB(255, 135, 89, 164);
+  static const Color kSurface = Color(0xFFF7F8FA);
+  static const double kRadius = 16;
+
+  bool _isLoggingOut = false;
 
   @override
   void initState() {
-    // TODO: implement initState
     super.initState();
-    _token = _prefs.then((SharedPreferences prefs) {
-      return prefs.getString("token") ?? "";
-    });
-
-    _name = _prefs.then((SharedPreferences prefs) {
-      return prefs.getString("name") ?? "";
-    });
+    _name = _prefs.then((p) => p.getString('name') ?? '-');
   }
 
-  Future getdata() async {
-    final Map<String, String> headres = {
-      'Authorization': 'Bearer ' + await _token,
-    };
-    var response = await myHttp.get(
-      Uri.parse('http://10.0.2.2:8000/api/get-presensi'),
-      headers: headres,
+  String _greetingByTime() {
+    final h = DateTime.now().hour;
+    if (h < 11) return 'Selamat pagi';
+    if (h < 15) return 'Selamat siang';
+    if (h < 18) return 'Selamat sore';
+    return 'Selamat malam';
+  }
+
+  String _formatDateID(DateTime d) {
+    const hari = ['Min', 'Sen', 'Sel', 'Rab', 'Kam', 'Jum', 'Sab'];
+    const bln = ['Jan','Feb','Mar','Apr','Mei','Jun','Jul','Agu','Sep','Okt','Nov','Des'];
+    return '${hari[d.weekday % 7]}, ${d.day} ${bln[d.month - 1]} ${d.year}';
+  }
+
+  void _comingSoon(String title) {
+    ScaffoldMessenger.of(context).showSnackBar(
+      SnackBar(content: Text('$title — segera hadir')),
+    );
+  }
+
+  Future<void> _confirmAndLogout() async {
+    if (_isLoggingOut) return;
+
+    final ok = await showDialog<bool>(
+      context: context,
+      builder: (_) => AlertDialog(
+        title: const Text('Keluar dari akun?'),
+        content: const Text('Anda akan keluar dan perlu masuk kembali untuk menggunakan aplikasi.'),
+        actions: [
+          TextButton(onPressed: () => Navigator.pop(context, false), child: const Text('Batal')),
+          ElevatedButton(onPressed: () => Navigator.pop(context, true), child: const Text('Logout')),
+        ],
+      ),
     );
 
-    homeResponseModel = HomeResponseModel.fromJson(json.decode(response.body));
-    riwayat.clear();
-    homeResponseModel!.data.forEach((element) {
-      if (element.isHariIni) {
-        hariIni = element;
-      } else {
-        riwayat.add(element);
+    if (ok != true) return;
+    await _logout();
+  }
+
+  Future<void> _logout() async {
+    setState(() => _isLoggingOut = true);
+    try {
+      final prefs = await _prefs;
+      final token = prefs.getString('token') ?? '';
+
+      // Panggil API logout (sesuaikan jika endpoint kamu berbeda)
+      try {
+        await myHttp.post(
+          Uri.parse('http://10.0.2.2:8000/api/logout'),
+          headers: {'Authorization': 'Bearer $token'},
+        );
+      } catch (_) {
+        // best-effort: jika jaringan gagal, tetap lanjut hapus sesi lokal
       }
-    });
-    // print('DATA :'+ response.body);
+
+      await prefs.remove('token');
+      await prefs.remove('name');
+
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('Berhasil logout')),
+      );
+
+      Navigator.of(context).pushAndRemoveUntil(
+        MaterialPageRoute(builder: (_) => const LoginPage()),
+        (route) => false,
+      );
+    } finally {
+      if (mounted) setState(() => _isLoggingOut = false);
+    }
   }
 
   @override
   Widget build(BuildContext context) {
+    final theme = Theme.of(context);
+
     return Scaffold(
-      body: FutureBuilder(
-        future: getdata(),
-        builder: (context, snapshot) {
-          if (snapshot.connectionState == ConnectionState.waiting) {
-            return Center(child: CircularProgressIndicator());
-          } else {
-            return SafeArea(
-              child: Padding(
-                padding: const EdgeInsets.all(16.0),
-                child: Column(
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  children: [
-                    FutureBuilder(
+      backgroundColor: kSurface,
+      body: SafeArea(
+        child: LayoutBuilder(
+          builder: (context, c) {
+            final isWide = c.maxWidth >= 720;
+            final crossAxisCount = isWide ? 3 : 2;
+            final gridPadding = EdgeInsets.symmetric(
+              horizontal: isWide ? 24 : 16,
+              vertical: 12,
+            );
+
+            return SingleChildScrollView(
+              padding: const EdgeInsets.only(bottom: 24),
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  // Header
+                  Padding(
+                    padding: const EdgeInsets.fromLTRB(16, 16, 16, 8),
+                    child: FutureBuilder<String>(
                       future: _name,
-                      builder: (
-                        BuildContext context,
-                        AsyncSnapshot<String> snapshot,
-                      ) {
-                        if (snapshot.connectionState ==
-                            ConnectionState.waiting) {
-                          return CircularProgressIndicator();
-                        } else {
-                          if (snapshot.hasData) {
-                            print(snapshot.data);
-                            return Text(
-                              snapshot.data!,
-                              style: TextStyle(fontSize: 18),
-                            );
-                          } else {
-                            return Text("-");
-                          }
-                        }
-                      },
-                    ),
-                    SizedBox(height: 30),
-                    Container(
-                      width: 400,
-                      decoration: BoxDecoration(
-                        color: const Color.fromARGB(255, 135, 89, 164),
-                      ),
-                      child: Padding(
-                        padding: const EdgeInsets.all(8.0),
-                        child: Column(
+                      builder: (context, snap) {
+                        final name = (snap.hasData && snap.data!.trim().isNotEmpty)
+                            ? snap.data!.trim()
+                            : '-';
+                        return Row(
                           children: [
-                            Text(
-                              hariIni?.tanggal ?? '-',
-                              style: TextStyle(
-                                color: Colors.white,
-                                fontSize: 16,
+                            Container(
+                              width: 56,
+                              height: 56,
+                              decoration: BoxDecoration(
+                                color: kPrimary.withOpacity(.12),
+                                borderRadius: BorderRadius.circular(14),
                               ),
+                              child: const Icon(Icons.badge_rounded, color: kPrimary, size: 28),
                             ),
-                            SizedBox(height: 20),
-                            Row(
-                              mainAxisAlignment: MainAxisAlignment.spaceEvenly,
-                              children: [
-                                Column(
-                                  children: [
-                                    Text(
-                                      hariIni?.masuk ?? '-',
-                                      style: TextStyle(
-                                        color: Colors.white,
-                                        fontSize: 24,
-                                      ),
-                                    ),
-                                    Text(
-                                      "Masuk",
-                                      style: TextStyle(
-                                        color: Colors.white,
-                                        fontSize: 16,
-                                      ),
-                                    ),
-                                  ],
-                                ),
-                                Column(
-                                  children: [
-                                    Text(
-                                      hariIni?.pulang ?? '-',
-                                      style: TextStyle(
-                                        color: Colors.white,
-                                        fontSize: 24,
-                                      ),
-                                    ),
-                                    Text(
-                                      "Pulang",
-                                      style: TextStyle(
-                                        color: Colors.white,
-                                        fontSize: 16,
-                                      ),
-                                    ),
-                                  ],
-                                ),
-                              ],
-                            ),
-                          ],
-                        ),
-                      ),
-                    ),
-                    SizedBox(height: 20),
-                    Text("Riwayat Presensi"),
-                    Expanded(
-                      child: ListView.builder(
-                        itemCount: riwayat.length,
-                        itemBuilder: (context, index) {
-                          return Card(
-                            child: Padding(
-                              padding: const EdgeInsets.all(12.0),
-                              child: Row(
+                            const SizedBox(width: 12),
+                            Expanded(
+                              child: Column(
+                                crossAxisAlignment: CrossAxisAlignment.start,
                                 children: [
-                                  // Tanggal
-                                  Expanded(
-                                    flex:
-                                        3, // Lebih besar supaya muat teks panjang
-                                    child: Text(
-                                      riwayat[index].tanggal,
-                                      style: TextStyle(fontSize: 16),
+                                  Text(_greetingByTime(),
+                                      style: theme.textTheme.labelMedium?.copyWith(
+                                        color: Colors.grey[700],
+                                      )),
+                                  const SizedBox(height: 2),
+                                  Text(
+                                    name,
+                                    style: theme.textTheme.titleLarge?.copyWith(
+                                      fontWeight: FontWeight.w700,
                                     ),
                                   ),
-
-                                  // Jam Masuk
-                                  Expanded(
-                                    flex: 1,
-                                    child: Column(
-                                      crossAxisAlignment:
-                                          CrossAxisAlignment.center,
-                                      children: [
-                                        Text(
-                                          riwayat[index].masuk,
-                                          style: TextStyle(fontSize: 18),
-                                        ),
-                                        Text(
-                                          "Masuk",
-                                          style: TextStyle(fontSize: 14),
-                                        ),
-                                      ],
-                                    ),
-                                  ),
-
-                                  // Jam Pulang
-                                  Expanded(
-                                    flex: 1,
-                                    child: Column(
-                                      crossAxisAlignment:
-                                          CrossAxisAlignment.center,
-                                      children: [
-                                        Text(
-                                          riwayat[index].pulang,
-                                          style: TextStyle(fontSize: 18),
-                                        ),
-                                        Text(
-                                          "Pulang",
-                                          style: TextStyle(fontSize: 14),
-                                        ),
-                                      ],
+                                  const SizedBox(height: 4),
+                                  Text(
+                                    _formatDateID(DateTime.now()),
+                                    style: theme.textTheme.bodySmall?.copyWith(
+                                      color: Colors.grey[600],
                                     ),
                                   ),
                                 ],
                               ),
                             ),
-                          );
-                        },
+
+                            // Tombol refresh (placeholder, jika diperlukan)
+                            IconButton(
+                              tooltip: 'Refresh',
+                              onPressed: () {
+                                // tambahkan aksi refresh home jika nanti ada data
+                                ScaffoldMessenger.of(context).showSnackBar(
+                                  const SnackBar(content: Text('Refreshed')),
+                                );
+                              },
+                              icon: const Icon(Icons.refresh),
+                            ),
+
+                            // Tombol Logout
+                            Padding(
+                              padding: const EdgeInsets.only(left: 4.0),
+                              child: _isLoggingOut
+                                  ? const SizedBox(
+                                      width: 24,
+                                      height: 24,
+                                      child: CircularProgressIndicator(strokeWidth: 2),
+                                    )
+                                  : IconButton(
+                                      tooltip: 'Logout',
+                                      onPressed: _confirmAndLogout,
+                                      icon: const Icon(Icons.logout_rounded, color: Colors.redAccent),
+                                    ),
+                            ),
+                          ],
+                        );
+                      },
+                    ),
+                  ),
+
+                  // Subheader
+                  const Padding(
+                    padding: EdgeInsets.symmetric(horizontal: 16.0, vertical: 8),
+                    child: Text(
+                      'Pintasan Fitur',
+                      style: TextStyle(fontSize: 16, fontWeight: FontWeight.w700),
+                    ),
+                  ),
+
+                  // Grid 2x2 / 3x? (responsif)
+                  Padding(
+                    padding: gridPadding,
+                    child: GridView(
+                      shrinkWrap: true,
+                      physics: const NeverScrollableScrollPhysics(),
+                      gridDelegate: SliverGridDelegateWithFixedCrossAxisCount(
+                        crossAxisCount: crossAxisCount,
+                        mainAxisSpacing: 12,
+                        crossAxisSpacing: 12,
+                        childAspectRatio: isWide ? 1.25 : 1.15,
+                      ),
+                      children: [
+                        _FeatureTile(
+                          color: kPrimary,
+                          icon: Icons.location_history,
+                          title: 'Absensi',
+                          subtitle: 'Check-in / Check-out',
+                          onTap: () {
+                            Navigator.of(context).push(
+                              MaterialPageRoute(builder: (_) => const AbsenPage()),
+                            );
+                          },
+                        ),
+                        _FeatureTile(
+                          color: const Color(0xFF23BB86),
+                          icon: Icons.event_busy_rounded,
+                          title: 'Pengajuan Cuti',
+                          subtitle: 'Izin, sakit, dinas',
+                          onTap: () => _comingSoon('Pengajuan Cuti'),
+                        ),
+                        _FeatureTile(
+                          color: const Color(0xFF04517E),
+                          icon: Icons.schedule_rounded,
+                          title: 'Lembur',
+                          subtitle: 'Ajukan & catat lembur',
+                          onTap: () => _comingSoon('Lembur'),
+                        ),
+                        _FeatureTile(
+                          color: const Color(0xFF2E7462),
+                          icon: Icons.calendar_month_rounded,
+                          title: 'Jadwal / Shift',
+                          subtitle: 'Jam & toleransi',
+                          onTap: () => _comingSoon('Jadwal / Shift'),
+                        ),
+                      ],
+                    ),
+                  ),
+
+                  // Info kecil (opsional)
+                  Padding(
+                    padding: const EdgeInsets.symmetric(horizontal: 16.0),
+                    child: Container(
+                      width: double.infinity,
+                      padding: const EdgeInsets.all(12),
+                      decoration: BoxDecoration(
+                        color: Colors.white,
+                        borderRadius: BorderRadius.circular(kRadius),
+                        boxShadow: [
+                          BoxShadow(
+                            color: Colors.black.withOpacity(.06),
+                            blurRadius: 14,
+                            offset: const Offset(0, 6),
+                          ),
+                        ],
+                        border: Border.all(color: Colors.black12.withOpacity(.06)),
+                      ),
+                      child: Row(
+                        children: [
+                          Icon(Icons.info_rounded, color: Colors.grey[700]),
+                          const SizedBox(width: 10),
+                          Expanded(
+                            child: Text(
+                              'Gunakan tombol di atas untuk mengakses fitur. Detail presensi ada di halaman Absensi.',
+                              style: theme.textTheme.bodySmall?.copyWith(
+                                color: Colors.grey[700],
+                              ),
+                            ),
+                          ),
+                        ],
                       ),
                     ),
-                  ],
-                ),
+                  ),
+                ],
               ),
             );
-          }
-        },
+          },
+        ),
       ),
-      floatingActionButton: FloatingActionButton(
-        onPressed: () {
-          Navigator.of(context)
-              .push(MaterialPageRoute(builder: (context) => SimpanPage()))
-              .then((Value) => (Value));
-        },
-        child: Icon(Icons.location_history),
+    );
+  }
+}
+
+class _FeatureTile extends StatelessWidget {
+  final Color color;
+  final IconData icon;
+  final String title;
+  final String subtitle;
+  final VoidCallback onTap;
+
+  const _FeatureTile({
+    required this.color,
+    required this.icon,
+    required this.title,
+    required this.subtitle,
+    required this.onTap,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    final theme = Theme.of(context);
+    return Material(
+      color: Colors.white,
+      borderRadius: BorderRadius.circular(_HomePageState.kRadius),
+      child: InkWell(
+        borderRadius: BorderRadius.circular(_HomePageState.kRadius),
+        onTap: onTap,
+        child: Padding(
+          padding: const EdgeInsets.fromLTRB(14, 14, 14, 14),
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              // icon badge
+              Container(
+                width: 44,
+                height: 44,
+                decoration: BoxDecoration(
+                  color: color.withOpacity(.12),
+                  borderRadius: BorderRadius.circular(12),
+                ),
+                child: Icon(icon, color: color, size: 26),
+              ),
+              const Spacer(),
+              Text(
+                title,
+                style: theme.textTheme.titleMedium?.copyWith(
+                  fontWeight: FontWeight.w700,
+                ),
+              ),
+              const SizedBox(height: 4),
+              Text(
+                subtitle,
+                maxLines: 1,
+                overflow: TextOverflow.ellipsis,
+                style: theme.textTheme.bodySmall?.copyWith(
+                  color: Colors.grey[700],
+                ),
+              ),
+            ],
+          ),
+        ),
       ),
     );
   }
