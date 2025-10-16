@@ -1,10 +1,12 @@
 import 'dart:convert';
 import 'package:flutter/material.dart';
 import 'package:location/location.dart';
-import 'package:presensi/models/save-presensi-response.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import 'package:syncfusion_flutter_maps/maps.dart';
 import 'package:http/http.dart' as myHttp;
+
+// ← pastikan path import ini sesuai struktur project kamu
+import 'package:presensi/models/save-presensi-response.dart';
 
 class SimpanPage extends StatefulWidget {
   const SimpanPage({super.key});
@@ -31,79 +33,134 @@ class _SimpanPageState extends State<SimpanPage> {
     });
   }
 
-  // NOTE: logic tetap sama seperti kode kamu (tidak diubah)
+  // --- Location helper (fixed: requestService) ---
   Future<LocationData?> _currenctlocation() async {
-    bool serviceEnable;
-    PermissionStatus permissionGrated;
+    final location = Location();
 
-    Location location = Location();
-
-    serviceEnable = await location.serviceEnabled();
-    if (!serviceEnable) {
-      serviceEnable = await location.serviceEnabled();
-      if (!serviceEnable) {
-        return null;
-      }
+    bool serviceEnabled = await location.serviceEnabled();
+    if (!serviceEnabled) {
+      // Perbaikan: minta menyalakan service
+      serviceEnabled = await location.requestService();
+      if (!serviceEnabled) return null;
     }
 
-    permissionGrated = await location.hasPermission();
-    if (permissionGrated == PermissionStatus.denied) {
-      permissionGrated = await location.requestPermission();
-      if (permissionGrated != PermissionStatus.granted) {
-        return null;
-      }
+    PermissionStatus permission = await location.hasPermission();
+    if (permission == PermissionStatus.denied) {
+      permission = await location.requestPermission();
+      if (permission != PermissionStatus.granted) return null;
     }
 
     return await location.getLocation();
   }
 
-  // NOTE: alur backend tetap sama — hanya tambah indikator loading
-  Future savePresensi(latitude, longitude) async {
+  // --- Simpan presensi (pakai model, aman terhadap data null) ---
+  Future<void> savePresensi(double? latitude, double? longitude) async {
+    if (latitude == null || longitude == null) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('Koordinat tidak tersedia')),
+      );
+      return;
+    }
+
+    final token = await _token;
+    if (token.isEmpty) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('Sesi berakhir. Silakan login ulang.')),
+      );
+      return;
+    }
+
     setState(() => _isSaving = true);
     try {
-      SavePresensiResponseModel savePresensiResponseModel;
-      Map<String, String> body = {
-        "latitude": latitude.toString(),
-        "longitude": longitude.toString(),
+      final uri = Uri.parse('http://10.0.2.2:8000/api/save-presensi');
+
+      final headers = <String, String>{
+        'Authorization': 'Bearer $token',
+        'Accept': 'application/json', // penting untuk Laravel API
+        // body Map -> form-url-encoded; kalau API butuh JSON body:
+        // 'Content-Type': 'application/json',
       };
 
-      Map<String, String> headers = {'Authorization': 'Bearer ' + await _token};
+      final body = <String, String>{
+        'latitude': latitude.toString(),
+        'longitude': longitude.toString(),
+      };
 
-      var response = await myHttp.post(
-        Uri.parse('http://10.0.2.2:8000/api/save-presensi'),
-        body: body,
-        headers: headers,
-      );
+      final response = await myHttp
+          .post(
+            uri,
+            headers: headers,
+            body: body,
+            // kalau API butuh JSON, ganti:
+            // body: jsonEncode(body),
+          )
+          .timeout(const Duration(seconds: 20));
 
-      savePresensiResponseModel = SavePresensiResponseModel.fromJson(
-        json.decode(response.body),
-      );
+      // Debug ringan (hapus jika tak perlu)
+      // ignore: avoid_print
+      print('[SAVE] status=${response.statusCode} body=${response.body}');
+
+      bool success = response.statusCode >= 200 && response.statusCode < 300;
+      String message = success ? 'Sukses Simpan Presensi' : 'Gagal Simpan Presensi';
+
+      // Coba parse pakai model kamu. Jika "data" null / shape beda, fallback ke baca manual.
+      try {
+        final decoded = json.decode(response.body);
+        if (decoded is Map<String, dynamic>) {
+          // kalau struktur persis dengan model
+          if (decoded.containsKey('success') &&
+              decoded.containsKey('message') &&
+              decoded.containsKey('data')) {
+            try {
+              final model = SavePresensiResponseModel.fromJson(decoded);
+              success = model.success;
+              message = model.message;
+              // model.data tersedia jika backend kirim; kalau tidak, parsing di atas bisa throw.
+            } catch (_) {
+              // kalau parsing model gagal (mis. data null),
+              // baca minimal success/message secara manual
+              final s = decoded['success'];
+              if (s is bool) success = s;
+              if (decoded['message'] != null) {
+                message = decoded['message'].toString();
+              }
+            }
+          } else {
+            // fallback manual bila key tidak lengkap
+            final s = decoded['success'];
+            if (s is bool) success = s;
+            if (decoded['message'] != null) {
+              message = decoded['message'].toString();
+            }
+          }
+        }
+      } catch (_) {
+        // body bukan JSON valid → biarkan pakai default message
+      }
 
       if (!mounted) return;
-      if (savePresensiResponseModel.success) {
-        ScaffoldMessenger.of(
-          context,
-        ).showSnackBar(const SnackBar(content: Text('Sukses Simpan Presensi')));
-        // Tetap mengikuti kode kamu (tidak memaksa pop):
-        Navigator.canPop(context);
+
+      if (success) {
+        ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(message)));
+        // Tutup halaman & kirim sinyal sukses ke AbsenPage agar refresh
+        Navigator.pop(context, true);
       } else {
-        ScaffoldMessenger.of(
-          context,
-        ).showSnackBar(const SnackBar(content: Text('Gagal Simpan Presensi')));
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text('$message (${response.statusCode})')),
+        );
       }
     } catch (e) {
       if (!mounted) return;
-      ScaffoldMessenger.of(
-        context,
-      ).showSnackBar(SnackBar(content: Text('Terjadi kesalahan: $e')));
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text('Terjadi kesalahan jaringan: $e')),
+      );
     } finally {
       if (mounted) setState(() => _isSaving = false);
     }
   }
 
   void _refreshLocation() {
-    // Cukup panggil setState agar FutureBuilder memanggil ulang _currenctlocation()
-    setState(() {});
+    setState(() {}); // memicu FutureBuilder memanggil ulang _currenctlocation()
   }
 
   @override
@@ -127,7 +184,7 @@ class _SimpanPageState extends State<SimpanPage> {
       ),
       body: FutureBuilder<LocationData?>(
         future: _currenctlocation(),
-        builder: (BuildContext context, AsyncSnapshot<LocationData?> snapshot) {
+        builder: (context, snapshot) {
           if (snapshot.connectionState == ConnectionState.waiting) {
             return _loadingSkeleton();
           }
@@ -141,11 +198,11 @@ class _SimpanPageState extends State<SimpanPage> {
             );
           }
 
-          final LocationData currenctlocation = snapshot.data!;
-          final lat = currenctlocation.latitude;
-          final lng = currenctlocation.longitude;
-          final acc = _safeAccuracy(currenctlocation);
-          final isMock = _safeIsMock(currenctlocation);
+          final loc = snapshot.data!;
+          final lat = loc.latitude;
+          final lng = loc.longitude;
+          final acc = _safeAccuracy(loc);
+          final isMock = _safeIsMock(loc);
 
           return SafeArea(
             child: ListView(
@@ -168,13 +225,10 @@ class _SimpanPageState extends State<SimpanPage> {
                   clipBehavior: Clip.antiAlias,
                   child: Column(
                     children: [
-                      // Header kecil di atas peta
+                      // Header di atas peta
                       Container(
                         width: double.infinity,
-                        padding: const EdgeInsets.symmetric(
-                          horizontal: 14,
-                          vertical: 12,
-                        ),
+                        padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 12),
                         decoration: const BoxDecoration(
                           gradient: LinearGradient(
                             begin: Alignment.topLeft,
@@ -191,10 +245,7 @@ class _SimpanPageState extends State<SimpanPage> {
                                 color: Colors.white.withOpacity(.2),
                                 borderRadius: BorderRadius.circular(10),
                               ),
-                              child: const Icon(
-                                Icons.place_rounded,
-                                color: Colors.white,
-                              ),
+                              child: const Icon(Icons.place_rounded, color: Colors.white),
                             ),
                             const SizedBox(width: 10),
                             Expanded(
@@ -208,13 +259,8 @@ class _SimpanPageState extends State<SimpanPage> {
                             ),
                             IconButton(
                               tooltip: 'Perbesar',
-                              onPressed: () {
-                                // Placeholder (tanpa ubah alur): bisa dikembangkan untuk fullscreen map
-                              },
-                              icon: const Icon(
-                                Icons.fullscreen_rounded,
-                                color: Colors.white,
-                              ),
+                              onPressed: () {},
+                              icon: const Icon(Icons.fullscreen_rounded, color: Colors.white),
                             ),
                           ],
                         ),
@@ -227,26 +273,19 @@ class _SimpanPageState extends State<SimpanPage> {
                               initialFocalLatLng: MapLatLng(lat!, lng!),
                               initialZoomLevel: 15,
                               initialMarkersCount: 1,
-                              // pakai HTTPS biar aman dari block mixed-content
-                              urlTemplate:
-                                  "https://tile.openstreetmap.org/{z}/{x}/{y}.png",
+                              urlTemplate: "https://tile.openstreetmap.org/{z}/{x}/{y}.png",
                               markerBuilder: (BuildContext context, int index) {
                                 return MapMarker(
                                   latitude: lat,
                                   longitude: lng,
-                                  child: const Icon(
-                                    Icons.location_on,
-                                    color: Colors.red,
-                                    size: 32,
-                                  ),
+                                  child: const Icon(Icons.location_on, color: Colors.red, size: 32),
                                 );
                               },
                             ),
                           ],
                         ),
                       ),
-
-                      // Info koordinat & akurasi
+                      // Info koordinat
                       Padding(
                         padding: const EdgeInsets.fromLTRB(14, 12, 14, 14),
                         child: Column(
@@ -258,9 +297,7 @@ class _SimpanPageState extends State<SimpanPage> {
                                 Expanded(
                                   child: Text(
                                     'Koordinat: ${lat.toStringAsFixed(6)}, ${lng.toStringAsFixed(6)}',
-                                    style: theme.textTheme.bodyMedium?.copyWith(
-                                      fontWeight: FontWeight.w600,
-                                    ),
+                                    style: theme.textTheme.bodyMedium?.copyWith(fontWeight: FontWeight.w600),
                                   ),
                                 ),
                               ],
@@ -268,42 +305,29 @@ class _SimpanPageState extends State<SimpanPage> {
                             const SizedBox(height: 6),
                             Row(
                               children: [
-                                Icon(
-                                  Icons.tune_rounded,
-                                  size: 18,
-                                  color: Colors.grey[700],
-                                ),
+                                Icon(Icons.tune_rounded, size: 18, color: Colors.grey[700]),
                                 const SizedBox(width: 8),
                                 Expanded(
                                   child: Text(
-                                    acc != null
-                                        ? 'Perkiraan akurasi ~${acc.toStringAsFixed(0)} m'
-                                        : 'Akurasi tidak tersedia',
-                                    style: theme.textTheme.bodySmall?.copyWith(
-                                      color: Colors.grey[700],
-                                    ),
+                                    acc != null ? 'Perkiraan akurasi ~${acc.toStringAsFixed(0)} m' : 'Akurasi tidak tersedia',
+                                    style: theme.textTheme.bodySmall?.copyWith(color: Colors.grey[700]),
                                   ),
                                 ),
                               ],
                             ),
-                            if (isMock != null && isMock) ...[
+                            if (isMock == true) ...[
                               const SizedBox(height: 6),
                               Row(
                                 children: [
-                                  const Icon(
-                                    Icons.warning_amber_rounded,
-                                    size: 18,
-                                    color: Colors.orange,
-                                  ),
+                                  const Icon(Icons.warning_amber_rounded, size: 18, color: Colors.orange),
                                   const SizedBox(width: 8),
                                   Expanded(
                                     child: Text(
                                       'Sinyal mock location terdeteksi.',
-                                      style: theme.textTheme.bodySmall
-                                          ?.copyWith(
-                                            color: Colors.orange[800],
-                                            fontWeight: FontWeight.w600,
-                                          ),
+                                      style: theme.textTheme.bodySmall?.copyWith(
+                                        color: Colors.orange[800],
+                                        fontWeight: FontWeight.w600,
+                                      ),
                                     ),
                                   ),
                                 ],
@@ -318,7 +342,7 @@ class _SimpanPageState extends State<SimpanPage> {
 
                 const SizedBox(height: 16),
 
-                // INFO COPY
+                // INFO
                 Container(
                   width: double.infinity,
                   padding: const EdgeInsets.all(14),
@@ -342,9 +366,7 @@ class _SimpanPageState extends State<SimpanPage> {
                       Expanded(
                         child: Text(
                           'Pastikan titik lokasi sesuai. Tekan “Simpan Presensi” untuk mengirimkan koordinat saat ini.',
-                          style: theme.textTheme.bodySmall?.copyWith(
-                            color: Colors.grey[700],
-                          ),
+                          style: theme.textTheme.bodySmall?.copyWith(color: Colors.grey[700]),
                         ),
                       ),
                     ],
@@ -360,34 +382,22 @@ class _SimpanPageState extends State<SimpanPage> {
                   child: ElevatedButton.icon(
                     style: ElevatedButton.styleFrom(
                       backgroundColor: kPrimary,
-                      shape: RoundedRectangleBorder(
-                        borderRadius: BorderRadius.circular(14),
-                      ),
+                      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(14)),
                     ),
                     onPressed: _isSaving ? null : () => savePresensi(lat, lng),
-                    icon:
-                        _isSaving
-                            ? const SizedBox(
-                              width: 22,
-                              height: 22,
-                              child: CircularProgressIndicator(
-                                strokeWidth: 2.4,
-                                valueColor: AlwaysStoppedAnimation<Color>(
-                                  Colors.white,
-                                ),
-                              ),
-                            )
-                            : const Icon(
-                              Icons.save_rounded,
-                              color: Colors.white,
+                    icon: _isSaving
+                        ? const SizedBox(
+                            width: 22,
+                            height: 22,
+                            child: CircularProgressIndicator(
+                              strokeWidth: 2.4,
+                              valueColor: AlwaysStoppedAnimation<Color>(Colors.white),
                             ),
+                          )
+                        : const Icon(Icons.save_rounded, color: Colors.white),
                     label: Text(
                       _isSaving ? 'Menyimpan...' : 'Simpan Presensi',
-                      style: const TextStyle(
-                        color: Colors.white,
-                        fontWeight: FontWeight.w700,
-                        fontSize: 16,
-                      ),
+                      style: const TextStyle(color: Colors.white, fontWeight: FontWeight.w700, fontSize: 16),
                     ),
                   ),
                 ),
@@ -439,22 +449,11 @@ class _SimpanPageState extends State<SimpanPage> {
         child: Column(
           mainAxisSize: MainAxisSize.min,
           children: [
-            Icon(
-              Icons.location_disabled_rounded,
-              size: 56,
-              color: Colors.grey[500],
-            ),
+            Icon(Icons.location_disabled_rounded, size: 56, color: Colors.grey[500]),
             const SizedBox(height: 12),
-            Text(
-              title,
-              style: const TextStyle(fontSize: 18, fontWeight: FontWeight.w700),
-            ),
+            Text(title, style: const TextStyle(fontSize: 18, fontWeight: FontWeight.w700)),
             const SizedBox(height: 6),
-            Text(
-              message,
-              textAlign: TextAlign.center,
-              style: TextStyle(color: Colors.grey[700]),
-            ),
+            Text(message, textAlign: TextAlign.center, style: TextStyle(color: Colors.grey[700])),
             const SizedBox(height: 16),
             OutlinedButton.icon(
               onPressed: onRetry,
@@ -482,16 +481,12 @@ class _SimpanPageState extends State<SimpanPage> {
     return Container(
       width: 10,
       height: 10,
-      decoration: BoxDecoration(
-        color: color,
-        borderRadius: BorderRadius.circular(99),
-      ),
+      decoration: BoxDecoration(color: color, borderRadius: BorderRadius.circular(99)),
     );
   }
 
   double? _safeAccuracy(LocationData d) {
     try {
-      // beberapa versi plugin menyediakan d.accuracy
       final val = (d.accuracy is num) ? (d.accuracy as num).toDouble() : null;
       return val;
     } catch (_) {
@@ -501,7 +496,6 @@ class _SimpanPageState extends State<SimpanPage> {
 
   bool? _safeIsMock(LocationData d) {
     try {
-      // beberapa versi plugin menyediakan d.isMock
       final val = (d.isMock is bool) ? d.isMock as bool : null;
       return val;
     } catch (_) {

@@ -236,9 +236,9 @@ class _HomePageState extends State<HomePage> {
                         _FeatureTile(
                           color: const Color(0xFF23BB86),
                           icon: Icons.event_busy_rounded,
-                          title: 'Pengajuan Cuti',
-                          subtitle: 'Izin, sakit, dinas',
-                          onTap: () => _comingSoon('Pengajuan Cuti'),
+                          title: 'Pengajuan Absen',
+                          subtitle: 'Cuti, Izin, sakit, dinas',
+                          onTap: () => _comingSoon('Pengajuan Absen'),
                         ),
                         _FeatureTile(
                           color: const Color(0xFF04517E),
@@ -250,9 +250,9 @@ class _HomePageState extends State<HomePage> {
                         _FeatureTile(
                           color: const Color(0xFF2E7462),
                           icon: Icons.calendar_month_rounded,
-                          title: 'Jadwal / Shift',
+                          title: 'Mapping Calender',
                           subtitle: 'Jam & toleransi',
-                          onTap: () => _comingSoon('Jadwal / Shift'),
+                          onTap: () => _comingSoon('Mapping Calender'),
                         ),
                       ],
                     ),
